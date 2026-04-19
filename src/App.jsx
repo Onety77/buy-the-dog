@@ -1,18 +1,25 @@
 import { useState, useEffect, useRef } from "react";
 
-const CONTRACT_ADDRESS = "YOUR_CONTRACT_ADDRESS_HERE";
+// ─── CONFIG ──────────────────────────────────────────────────────────────────
+const CA = "YOUR_CONTRACT_ADDRESS_HERE";
+const TITLE = "BUY THE D◎G";
 
-// ─── TRUE ARCHIMEDEAN SPIRAL CANVAS ──────────────────────────────────────────
-// One continuous line from center spiralling outward. Works on mobile via touch.
-function SpiralCanvas({ speed, distortion, hypnosis, intensity }) {
+// ─── SPIRAL CANVAS ───────────────────────────────────────────────────────────
+// TRUE Archimedean spiral: r = b·θ
+// One continuous polyline from centre outward. Black bg, white line.
+function Spiral({ hypnosis, mouse }) {
   const canvasRef = useRef(null);
-  const animRef   = useRef(null);
-  const angleRef  = useRef(0);
+  const rafRef    = useRef(null);
+  // Mutable state kept in a ref so the draw closure always sees fresh values
+  // without triggering re-renders.
+  const stateRef  = useRef({
+    rotation   : 0,   // current rotation offset (radians)
+    zoom       : 1,   // current zoom (eased)
+  });
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
+    const ctx    = canvas.getContext("2d");
 
     const resize = () => {
       canvas.width  = window.innerWidth;
@@ -24,69 +31,86 @@ function SpiralCanvas({ speed, distortion, hypnosis, intensity }) {
     const draw = () => {
       const W = canvas.width;
       const H = canvas.height;
-      ctx.clearRect(0, 0, W, H);
+      const st = stateRef.current;
 
-      // Solid dark background
-      ctx.fillStyle = "#060606";
+      // ── Advance rotation ──────────────────────────────────────────────────
+      // Idle: barely perceptible. Hypnosis: fast.
+      st.rotation += hypnosis ? 0.018 : 0.0035;
+
+      // ── Ease zoom ────────────────────────────────────────────────────────
+      const targetZoom = hypnosis ? 1.22 : 1.0;
+      st.zoom += (targetZoom - st.zoom) * 0.035;
+
+      // ── Clear ────────────────────────────────────────────────────────────
+      ctx.fillStyle = "#000";
       ctx.fillRect(0, 0, W, H);
 
-      // Center shifts with distortion (amplified in hypnosis)
-      const distScale = hypnosis ? 0.10 : 0.045;
-      const cx = W / 2 + distortion.x * distScale;
-      const cy = H / 2 + distortion.y * distScale;
-
-      const maxR   = Math.sqrt(W * W + H * H) * 0.8;
-      // spacing between successive loops of the spiral arm
-      const spacing = hypnosis ? 7 : 10;
-      const turns   = maxR / spacing;
-      // enough steps for a smooth curve at any screen size
-      const steps   = Math.ceil(turns * 2 * Math.PI * 2);
+      // ── Transform: center + parallax + zoom ──────────────────────────────
+      const parallaxStrength = hypnosis ? 32 : 14;
+      const cx = W / 2 + mouse.x * parallaxStrength;
+      const cy = H / 2 + mouse.y * parallaxStrength;
 
       ctx.save();
       ctx.translate(cx, cy);
+      ctx.scale(st.zoom, st.zoom);
+      ctx.rotate(st.rotation);
 
-      // Line style
-      ctx.strokeStyle = hypnosis
-        ? `rgba(255,255,255,${0.55 + intensity * 0.38})`
-        : "rgba(205,205,205,0.6)";
-      ctx.lineWidth   = hypnosis ? 1.1 + intensity * 0.9 : 0.95;
-      ctx.lineCap     = "round";
-      ctx.lineJoin    = "round";
+      // ── Draw the Archimedean spiral ───────────────────────────────────────
+      // r = b * θ  where b controls spacing between successive turns.
+      // We step θ from 0 to θ_max in tiny increments.
+      // θ_max is chosen so the outermost loop reaches the screen corner.
+      const maxR = Math.sqrt(W * W + H * H) * 0.54; // radius to fill screen
 
-      // Archimedean spiral: r = spacing * θ / (2π), rotated by angleRef
+      // b = spacing between turns / (2π)
+      // Tighter in hypnosis so more loops are visible.
+      const spacing = hypnosis ? 22 : 32; // px between successive loops
+      const b = spacing / (2 * Math.PI);
+
+      // How many full turns fit before r > maxR?
+      const θmax = maxR / b;
+
+      // Step size: smaller = smoother curve. 0.04 rad ≈ 2.3° per step.
+      const dθ = 0.04;
+
       ctx.beginPath();
-      for (let i = 0; i <= steps; i++) {
-        const theta = (i / steps) * turns * 2 * Math.PI;
-        const r     = (theta / (2 * Math.PI)) * spacing;
-        const angle = theta + angleRef.current;
-        const x     = r * Math.cos(angle);
-        const y     = r * Math.sin(angle);
-        if (i === 0) ctx.moveTo(x, y);
-        else         ctx.lineTo(x, y);
+      // lineWidth = spacing/2 makes the white arm exactly as wide as the black gap
+      ctx.lineWidth   = spacing / 2;
+      ctx.strokeStyle = hypnosis
+        ? "rgba(255,255,255,1.0)"
+        : "rgba(255,255,255,0.95)";
+      ctx.lineCap  = "butt";   // butt caps keep band edges clean (no round overlap)
+      ctx.lineJoin = "round";
+
+      for (let θ = 0; θ <= θmax; θ += dθ) {
+        const r = b * θ;
+        const x = r * Math.cos(θ);
+        const y = r * Math.sin(θ);
+        θ === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
       }
+
       ctx.stroke();
       ctx.restore();
 
-      // Vignette — deepen during hypnosis
-      const vigR = Math.max(W, H) * 0.65;
-      const vignette = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, vigR);
-      vignette.addColorStop(0, "transparent");
-      vignette.addColorStop(1, hypnosis
-        ? `rgba(0,0,0,${0.72 + intensity * 0.22})`
-        : "rgba(0,0,0,0.52)");
-      ctx.fillStyle = vignette;
+      // ── Radial vignette ───────────────────────────────────────────────────
+      const vAlpha = hypnosis ? 0.68 : 0.50;
+      const vg = ctx.createRadialGradient(W/2, H/2, 0, W/2, H/2, Math.max(W, H) * 0.62);
+      vg.addColorStop(0,   "transparent");
+      vg.addColorStop(0.5, "transparent");
+      vg.addColorStop(1,   `rgba(0,0,0,${vAlpha})`);
+      ctx.fillStyle = vg;
       ctx.fillRect(0, 0, W, H);
 
-      angleRef.current += speed * 0.003;
-      animRef.current = requestAnimationFrame(draw);
+      rafRef.current = requestAnimationFrame(draw);
     };
 
     draw();
     return () => {
-      cancelAnimationFrame(animRef.current);
+      cancelAnimationFrame(rafRef.current);
       window.removeEventListener("resize", resize);
     };
-  }, [speed, distortion, hypnosis, intensity]);
+  // Restart loop when hypnosis toggles (speed + spacing change)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hypnosis]);
 
   return (
     <canvas
@@ -95,8 +119,10 @@ function SpiralCanvas({ speed, distortion, hypnosis, intensity }) {
         position  : "fixed",
         inset     : 0,
         zIndex    : 0,
-        transition: "filter 0.8s ease",
-        filter    : hypnosis ? "contrast(1.35)" : "contrast(1.1)",
+        filter    : hypnosis
+          ? "contrast(1.55) brightness(1.1)"
+          : "contrast(1.05) brightness(0.97)",
+        transition: "filter 0.9s ease",
       }}
     />
   );
@@ -104,552 +130,258 @@ function SpiralCanvas({ speed, distortion, hypnosis, intensity }) {
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
-  const [scrollY,   setScrollY]   = useState(0);
-  const [cursor,    setCursor]    = useState({
-    x: typeof window !== "undefined" ? window.innerWidth  / 2 : 0,
-    y: typeof window !== "undefined" ? window.innerHeight / 2 : 0,
-  });
-  const [hypnosis,  setHypnosis]  = useState(false);
-  const [copied,    setCopied]    = useState(false);
-  const [glitch,    setGlitch]    = useState(false);
-  const [intensity, setIntensity] = useState(0); // 0–1, spikes on interaction
-  const intensityRef    = useRef(0);
-  const intensityAnimId = useRef(null);
+  const [hypnosis, setHypnosis] = useState(false);
+  const [copied,   setCopied]   = useState(false);
+  const [mouse,    setMouse]    = useState({ x: 0, y: 0 });
 
-  // ── Intensity helpers ──────────────────────────────────────────────────────
-  const decayIntensity = () => {
-    cancelAnimationFrame(intensityAnimId.current);
-    const step = () => {
-      intensityRef.current = Math.max(0, intensityRef.current - 0.018);
-      setIntensity(intensityRef.current);
-      if (intensityRef.current > 0) intensityAnimId.current = requestAnimationFrame(step);
-    };
-    intensityAnimId.current = requestAnimationFrame(step);
-  };
+  // Smooth normalised mouse offset (–0.5 to +0.5)
+  const mouseRef      = useRef({ x: 0, y: 0 });
+  const mouseLerpRef  = useRef({ x: 0, y: 0 });
+  const lerpRafRef    = useRef(null);
 
-  const boostIntensity = (val = 1) => {
-    cancelAnimationFrame(intensityAnimId.current);
-    intensityRef.current = Math.min(1, Math.max(intensityRef.current, val));
-    setIntensity(intensityRef.current);
-    decayIntensity();
-  };
-
-  // ── Global pointer / touch / scroll listeners ──────────────────────────────
   useEffect(() => {
-    const onScroll = () => {
-      setScrollY(window.scrollY);
-      boostIntensity(0.5);
-    };
     const onMove = (e) => {
-      setCursor({ x: e.clientX, y: e.clientY });
-      if (hypnosis) boostIntensity(0.55);
+      mouseRef.current = {
+        x: (e.clientX / window.innerWidth  - 0.5),
+        y: (e.clientY / window.innerHeight - 0.5),
+      };
     };
-    const onTouchStart = (e) => {
+    const onTouch = (e) => {
       const t = e.touches[0];
-      setCursor({ x: t.clientX, y: t.clientY });
-      boostIntensity(0.85);
-    };
-    const onTouchMove = (e) => {
-      const t = e.touches[0];
-      setCursor({ x: t.clientX, y: t.clientY });
-      boostIntensity(1.0);
+      mouseRef.current = {
+        x: (t.clientX / window.innerWidth  - 0.5),
+        y: (t.clientY / window.innerHeight - 0.5),
+      };
     };
 
-    window.addEventListener("scroll",     onScroll,     { passive: true });
+    // Lerp loop — smooth mouse tracking
+    const lerp = () => {
+      const target = mouseRef.current;
+      const curr   = mouseLerpRef.current;
+      const k      = 0.06;
+      curr.x += (target.x - curr.x) * k;
+      curr.y += (target.y - curr.y) * k;
+      setMouse({ x: curr.x, y: curr.y });
+      lerpRafRef.current = requestAnimationFrame(lerp);
+    };
+    lerpRafRef.current = requestAnimationFrame(lerp);
+
     window.addEventListener("mousemove",  onMove);
-    window.addEventListener("touchstart", onTouchStart, { passive: true });
-    window.addEventListener("touchmove",  onTouchMove,  { passive: true });
+    window.addEventListener("touchmove",  onTouch, { passive: true });
+    window.addEventListener("touchstart", onTouch, { passive: true });
     return () => {
-      window.removeEventListener("scroll",     onScroll);
+      cancelAnimationFrame(lerpRafRef.current);
       window.removeEventListener("mousemove",  onMove);
-      window.removeEventListener("touchstart", onTouchStart);
-      window.removeEventListener("touchmove",  onTouchMove);
+      window.removeEventListener("touchmove",  onTouch);
+      window.removeEventListener("touchstart", onTouch);
     };
-  }, [hypnosis]);
+  }, []);
 
-  // ── Derived values ──────────────────────────────────────────────────────────
-  const distortion = {
-    x: cursor.x - (typeof window !== "undefined" ? window.innerWidth  / 2 : 0),
-    y: cursor.y - (typeof window !== "undefined" ? window.innerHeight / 2 : 0),
-  };
-  // In hypnosis, amplify the centre-shift by interaction intensity
-  const distortionForCanvas = {
-    x: distortion.x * (hypnosis ? 1 + intensity * 3.5 : 1),
-    y: distortion.y * (hypnosis ? 1 + intensity * 3.5 : 1),
-  };
-
-  const baseSpeed   = 1 + scrollY * 0.003;
-  const spiralSpeed = hypnosis ? baseSpeed * 3.8 : baseSpeed;
-
-  // ── Hypnosis toggle ─────────────────────────────────────────────────────────
-  const toggleHypnosis = () => {
-    setGlitch(true);
-    setTimeout(() => setGlitch(false), 500);
-    setHypnosis((h) => !h);
-    boostIntensity(1);
-  };
-
-  // ── Copy CA ─────────────────────────────────────────────────────────────────
-  const copyCA = () => {
-    navigator.clipboard.writeText(CONTRACT_ADDRESS).then(() => {
+  const copyCA = (e) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(CA).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
   };
 
-  // ── Float tick (RAF) ────────────────────────────────────────────────────────
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    let id;
-    const loop = () => { setTick((t) => t + 1); id = requestAnimationFrame(loop); };
-    id = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(id);
-  }, []);
+  // Dog parallax offset (foreground moves less than spiral = depth)
+  const dogX = mouse.x * -18;
+  const dogY = mouse.y * -14;
 
-  const floatY        = Math.sin(tick * 0.018) * 12;
-  const floatRot      = Math.sin(tick * 0.011) * 1.5;
-  const dogParallaxX  = distortion.x * 0.015;
-  const dogParallaxY  = distortion.y * 0.015;
-
-  // ────────────────────────────────────────────────────────────────────────────
   return (
-    <div style={{
-      minHeight : "100vh",
-      overflow  : "hidden",
-      fontFamily: "'Bebas Neue', 'Impact', sans-serif",
-      cursor    : hypnosis ? "crosshair" : "default",
-      userSelect: "none",
-    }}>
-
-      {/* ── Fonts & global keyframes ── */}
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Mono:wght@400;700&display=swap');
-
-        @keyframes floatIn {
-          from { opacity:0; transform: translateY(40px) scale(0.92); }
-          to   { opacity:1; transform: translateY(0)    scale(1);    }
-        }
-        @keyframes hypnoDogIn {
-          from { opacity:0; transform: scale(0.72) translateY(28px); }
-          to   { opacity:1; transform: scale(1)    translateY(0);    }
-        }
-        @keyframes glitchFlash {
-          0%   { filter: invert(0); }
-          20%  { filter: invert(1) hue-rotate(90deg);  }
-          40%  { filter: invert(0); }
-          60%  { filter: invert(1) hue-rotate(200deg); }
-          80%  { filter: invert(0); }
-          100% { filter: invert(0); }
-        }
-        @keyframes pulse {
-          0%,100% { transform: scale(1);    box-shadow: 0 0 30px rgba(255,255,255,0.3); }
-          50%     { transform: scale(1.04); box-shadow: 0 0 60px rgba(255,255,255,0.7); }
-        }
-        @keyframes ctaGlow {
-          0%,100% { text-shadow: -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000, 0 0 18px #fff, 0 0 36px #fff; }
-          50%     { text-shadow: -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000, 0 0 38px #fff, 0 0 76px #aaa, 0 0 110px #777; }
-        }
-        @keyframes slideUp {
-          from { opacity:0; transform: translateY(30px); }
-          to   { opacity:1; transform: translateY(0);    }
-        }
-        @keyframes ripple {
-          0%   { transform: scale(0.8); opacity: 1; }
-          100% { transform: scale(2.8); opacity: 0; }
-        }
-
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        ::-webkit-scrollbar       { width: 3px; }
-        ::-webkit-scrollbar-track { background: #000; }
-        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.3); }
-
-        /* Legibility helpers */
-        .sh  { text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 2px 10px rgba(0,0,0,0.95); }
-        .sh2 { text-shadow: -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000,
-                             -1px 0 0 #000, 1px 0 0 #000, 0 -1px 0 #000, 0 1px 0 #000,
-                             0 4px 24px rgba(0,0,0,0.95), 0 0 40px rgba(0,0,0,0.8); }
-      `}</style>
-
-      {/* Spiral */}
-      <SpiralCanvas
-        speed={spiralSpeed}
-        distortion={distortionForCanvas}
-        hypnosis={hypnosis}
-        intensity={intensity}
-      />
-
-      {/* Glitch flash */}
-      {glitch && (
-        <div style={{
-          position    : "fixed", inset: 0, zIndex: 100,
-          animation   : "glitchFlash 0.5s ease forwards",
-          pointerEvents: "none",
-          background  : "rgba(255,255,255,0.04)",
-        }} />
-      )}
-
-      {/* ══════════════════════════════════
-           HERO
-      ══════════════════════════════════ */}
-      <div style={{
-        position       : "relative",
-        zIndex         : 10,
+    <div
+      style={{
         minHeight      : "100vh",
         display        : "flex",
         flexDirection  : "column",
         alignItems     : "center",
         justifyContent : "center",
-        padding        : "20px",
+        userSelect     : "none",
+        fontFamily     : "'Bebas Neue', 'Impact', sans-serif",
+        cursor         : hypnosis ? "crosshair" : "default",
+      }}
+    >
+      {/* ── Fonts + keyframes ── */}
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Mono:wght@400;700&display=swap');
+
+        @keyframes fadeUp  { from{opacity:0;transform:translateY(24px)} to{opacity:1;transform:translateY(0)} }
+        @keyframes floatDog{
+          0%,100%{transform:translateY(0px)}
+          50%    {transform:translateY(-14px)}
+        }
+        @keyframes glowPulse{
+          0%,100%{text-shadow:-2px -2px 0 #000,2px -2px 0 #000,-2px 2px 0 #000,2px 2px 0 #000,0 0 18px #fff,0 0 36px #fff}
+          50%    {text-shadow:-2px -2px 0 #000,2px -2px 0 #000,-2px 2px 0 #000,2px 2px 0 #000,0 0 40px #fff,0 0 80px #ccc,0 0 120px #aaa}
+        }
+        @keyframes btnPulse{
+          0%,100%{box-shadow:0 0 0 0 rgba(255,255,255,0)}
+          50%    {box-shadow:0 0 0 6px rgba(255,255,255,0.08)}
+        }
+
+        *{box-sizing:border-box;margin:0;padding:0}
+        html,body{min-height:100%;overflow-y:auto;background:#000}
+        ::-webkit-scrollbar{width:2px}
+        ::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.2)}
+      `}</style>
+
+      {/* ── Spiral (z:0) ── */}
+      <Spiral hypnosis={hypnosis} mouse={mouse} />
+
+      {/* ── Hypnosis dim veil — covers background intensity difference (z:2) ── */}
+      <div style={{
+        position  : "fixed",
+        inset     : 0,
+        zIndex    : 2,
+        background: hypnosis ? "rgba(0,0,0,0.35)" : "rgba(0,0,0,0)",
+        transition: "background 0.8s ease",
+        pointerEvents: "none",
+      }} />
+
+      {/* ── Content layer (z:10) ── */}
+      <div style={{
+        position       : "relative",
+        zIndex         : 10,
+        display        : "flex",
+        flexDirection  : "column",
+        alignItems     : "center",
+        justifyContent : "center",
+        padding        : "40px 16px",
+        transform      : `translate(${dogX * 0.3}px, ${dogY * 0.3}px)`,
+        transition     : "transform 0.1s linear",
+        width          : "100%",
       }}>
 
-        {/* Title */}
-        <div style={{ animation: "slideUp 1s ease forwards", textAlign: "center", marginBottom: "4px" }}>
-          <h1 className="sh2" style={{
-            fontSize     : "clamp(52px, 12vw, 120px)",
-            color        : "#fff",
-            letterSpacing: "4px",
-            lineHeight   : 0.9,
-            animation    : hypnosis ? "ctaGlow 1.5s ease infinite" : "none",
-            transition   : "text-shadow 0.8s ease",
-          }}>
-            BUY THE<br />
-            <span style={{ fontSize: "1.1em", letterSpacing: "8px" }}>D◎G</span>
-          </h1>
-        </div>
+        {/* ─ TITLE ─ */}
+        <h1 style={{
+          color        : "#fff",
+          fontSize     : "clamp(56px, 10vw, 130px)",
+          letterSpacing: "clamp(6px, 1.2vw, 18px)",
+          lineHeight   : 1,
+          textAlign    : "center",
+          marginBottom : "0",
+          fontWeight   : "400",
+          animation    : hypnosis
+            ? "glowPulse 2s ease infinite"
+            : "fadeUp 1s ease forwards",
+          textShadow   : hypnosis
+            ? undefined
+            : "0 0 60px rgba(255,255,255,0.18), 0 2px 0 rgba(0,0,0,0.8), 0 8px 40px rgba(0,0,0,0.95)",
+        }}>
+          {TITLE}
+        </h1>
 
-        {/* Dog */}
+        {/* ─ DOG ─ */}
         <div style={{
-          position  : "relative",
-          transform : `translate(${dogParallaxX}px, ${floatY + dogParallaxY}px) rotate(${floatRot}deg) scale(${hypnosis ? 1.25 : 1})`,
-          transition: "scale 0.8s cubic-bezier(0.34,1.56,0.64,1)",
-          animation : "floatIn 1.2s ease forwards",
-          filter    : `drop-shadow(0 20px 60px rgba(0,0,0,0.85)) drop-shadow(0 0 ${hypnosis ? "60px" : "18px"} rgba(255,255,255,${hypnosis ? 0.3 : 0.07}))`,
-          zIndex    : 20,
-          marginTop : "-8px",
+          transform : `translate(${dogX}px, ${dogY}px) scale(${hypnosis ? 1.07 : 1})`,
+          transition: "transform 0.12s linear, scale 1s cubic-bezier(.34,1.56,.64,1)",
+          animation : "floatDog 5s ease-in-out infinite",
+          filter    : `drop-shadow(0 0 ${hypnosis ? 60 : 24}px rgba(255,255,255,${hypnosis ? 0.45 : 0.12})) drop-shadow(0 24px 48px rgba(0,0,0,0.9))`,
+          willChange: "transform",
+          flexShrink: 0,
         }}>
           <img
             src="/dog.png"
             alt="The Dog"
-            style={{ width: "clamp(220px, 40vw, 420px)", height: "auto", display: "block" }}
+            draggable={false}
+            style={{
+              width    : "min(60vw, 420px)",
+              minWidth : "320px",
+              maxWidth : "420px",
+              height   : "auto",
+              display  : "block",
+            }}
             onError={(e) => {
-              if (!e.target.dataset.tried) { e.target.dataset.tried = "1"; e.target.src = "/dog1.png"; }
+              if (!e.target.dataset.tried) {
+                e.target.dataset.tried = "1";
+                e.target.src = "/dog1.png";
+              }
             }}
           />
         </div>
 
-        {/* Contract Address */}
-        <div style={{ animation: "slideUp 1.4s ease forwards", marginTop: "clamp(14px, 3vw, 28px)", zIndex: 20 }}>
-          <div className="sh" style={{
-            fontSize     : "clamp(9px, 1.8vw, 12px)",
-            color        : "rgba(255,255,255,0.85)",
-            letterSpacing: "4px",
-            fontFamily   : "'Space Mono', monospace",
-            textAlign    : "center",
-            marginBottom : "8px",
-          }}>
-            CONTRACT ADDRESS
-          </div>
-          <button
-            onClick={copyCA}
-            onPointerEnter={(e) => {
-              e.currentTarget.style.background = "rgba(255,255,255,0.15)";
-              e.currentTarget.style.borderColor = "rgba(255,255,255,0.6)";
-              boostIntensity(0.6);
-            }}
-            onPointerLeave={(e) => {
-              e.currentTarget.style.background = copied ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.07)";
-              e.currentTarget.style.borderColor = "rgba(255,255,255,0.28)";
-            }}
-            style={{
-              background   : copied ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.07)",
-              border       : "1px solid rgba(255,255,255,0.28)",
-              borderRadius : "3px",
-              padding      : "12px 22px",
-              color        : copied ? "#b8ffb8" : "#fff",
-              fontFamily   : "'Space Mono', monospace",
-              fontSize     : "clamp(9px, 1.5vw, 13px)",
-              letterSpacing: "2px",
-              cursor       : "pointer",
-              backdropFilter: "blur(10px)",
-              transition   : "all 0.3s ease",
-              display      : "flex",
-              alignItems   : "center",
-              gap          : "10px",
-              maxWidth     : "90vw",
-              textShadow   : "-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000",
-            }}
-          >
-            <span style={{ opacity: 0.55, flexShrink: 0 }}>{copied ? "✓" : "⎘"}</span>
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {copied ? "COPIED TO CLIPBOARD" : CONTRACT_ADDRESS}
-            </span>
-          </button>
-        </div>
-
-        {/* Hypnosis button */}
+        {/* ─ CA ─ */}
         <button
-          onClick={toggleHypnosis}
-          onPointerEnter={() => boostIntensity(0.5)}
-          onMouseEnter={(e) => { if (!hypnosis) { e.currentTarget.style.background = "rgba(255,255,255,0.13)"; e.currentTarget.style.transform = "scale(1.05)"; } }}
-          onMouseLeave={(e) => { if (!hypnosis) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.transform = "scale(1)"; } }}
+          onClick={copyCA}
           style={{
-            marginTop    : "clamp(18px, 4vw, 34px)",
-            background   : hypnosis ? "rgba(255,255,255,0.92)" : "transparent",
-            border       : `2px solid ${hypnosis ? "#111" : "rgba(255,255,255,0.72)"}`,
-            borderRadius : "2px",
-            padding      : "13px 36px",
-            color        : hypnosis ? "#000" : "#fff",
-            fontFamily   : "'Bebas Neue', sans-serif",
-            fontSize     : "clamp(16px, 3vw, 22px)",
-            letterSpacing: "6px",
+            marginTop    : "clamp(10px, 1.8vh, 22px)",
+            background   : copied ? "rgba(180,255,180,0.12)" : "rgba(0,0,0,0.55)",
+            border       : `1px solid ${copied ? "rgba(180,255,180,0.5)" : "rgba(255,255,255,0.32)"}`,
+            borderRadius : "4px",
+            padding      : "11px 22px",
+            color        : copied ? "#b8ffb8" : "#fff",
+            fontFamily   : "'Space Mono', monospace",
+            fontSize     : "clamp(9px, 1.6vw, 13px)",
+            letterSpacing: "1.5px",
             cursor       : "pointer",
-            transition   : "all 0.5s cubic-bezier(0.34,1.56,0.64,1)",
-            animation    : hypnosis ? "pulse 2s ease infinite" : "none",
-            zIndex       : 20,
-            position     : "relative",
-            textShadow   : hypnosis ? "none" : "-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000",
+            backdropFilter: "blur(14px)",
+            transition   : "all 0.3s ease",
+            display      : "flex",
+            alignItems   : "center",
+            gap          : "10px",
+            maxWidth     : "min(92vw, 520px)",
+            textShadow   : "-1px -1px 0 #000,1px -1px 0 #000,-1px 1px 0 #000,1px 1px 0 #000",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background    = "rgba(255,255,255,0.13)";
+            e.currentTarget.style.borderColor   = "rgba(255,255,255,0.65)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background    = copied ? "rgba(180,255,180,0.12)" : "rgba(0,0,0,0.55)";
+            e.currentTarget.style.borderColor   = copied ? "rgba(180,255,180,0.5)" : "rgba(255,255,255,0.32)";
           }}
         >
-          {hypnosis ? "◉ ESCAPE THE SPIRAL ◉" : "◎ ENTER HYPNOSIS ◎"}
+          <span style={{ opacity: 0.5, flexShrink: 0, fontSize: "15px" }}>
+            {copied ? "✓" : "⎘"}
+          </span>
+          <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+            {copied ? "COPIED!" : CA}
+          </span>
         </button>
 
-        {/* Social links */}
-        <div style={{
-          display        : "flex",
-          gap            : "28px",
-          marginTop      : "26px",
-          zIndex         : 20,
-          flexWrap       : "wrap",
-          justifyContent : "center",
-          animation      : "slideUp 1.8s ease forwards",
-        }}>
-          {["X/TWITTER", "TELEGRAM", "DEXSCREENER"].map((label) => (
-            <a
-              key={label}
-              href="#"
-              onPointerEnter={(e) => { e.currentTarget.style.color = "#fff"; boostIntensity(0.55); }}
-              onPointerLeave={(e) => { e.currentTarget.style.color = "rgba(255,255,255,0.5)"; }}
-              style={{
-                color        : "rgba(255,255,255,0.5)",
-                fontFamily   : "'Space Mono', monospace",
-                fontSize     : "clamp(8px, 1.5vw, 11px)",
-                letterSpacing: "3px",
-                textDecoration: "none",
-                transition   : "color 0.3s",
-                textShadow   : "-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 2px 8px rgba(0,0,0,0.9)",
-              }}
-            >
-              {label}
-            </a>
-          ))}
-        </div>
-      </div>
-
-      {/* ══════════════════════════════════
-           HYPNOSIS OVERLAY
-           No opaque box — the live spiral IS
-           the background. Dog + name + CA float.
-      ══════════════════════════════════ */}
-      {hypnosis && (
-        <div
-          onClick={toggleHypnosis}
-          onMouseMove={(e)  => { setCursor({ x: e.clientX, y: e.clientY }); boostIntensity(0.85); }}
-          onTouchStart={(e) => { const t = e.touches[0]; setCursor({ x: t.clientX, y: t.clientY }); boostIntensity(1); }}
-          onTouchMove={(e)  => { const t = e.touches[0]; setCursor({ x: t.clientX, y: t.clientY }); boostIntensity(1); }}
+        {/* ─ HYPNOSIS BUTTON ─ */}
+        <button
+          onClick={() => setHypnosis(h => !h)}
           style={{
-            position       : "fixed",
-            inset          : 0,
-            zIndex         : 50,
-            display        : "flex",
-            flexDirection  : "column",
-            alignItems     : "center",
-            justifyContent : "center",
-            animation      : "floatIn 0.5s ease forwards",
-            cursor         : "crosshair",
-            // intentionally no background — the canvas below shows through
+            marginTop     : "clamp(8px, 1.5vh, 16px)",
+            background    : hypnosis ? "rgba(255,255,255,0.95)" : "rgba(0,0,0,0.55)",
+            border        : `2px solid ${hypnosis ? "#fff" : "rgba(255,255,255,0.68)"}`,
+            borderRadius  : "4px",
+            padding       : "13px 40px",
+            color         : hypnosis ? "#000" : "#fff",
+            fontFamily    : "'Bebas Neue', sans-serif",
+            fontSize      : "clamp(15px, 2.8vw, 22px)",
+            letterSpacing : "6px",
+            cursor        : "pointer",
+            transition    : "all 0.45s cubic-bezier(.34,1.56,.64,1)",
+            animation     : hypnosis ? "btnPulse 2s ease infinite" : "none",
+            backdropFilter: "blur(14px)",
+            boxShadow     : hypnosis
+              ? "0 0 24px rgba(255,255,255,0.35), inset 0 0 12px rgba(255,255,255,0.1)"
+              : "0 4px 24px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.08), inset 0 1px 0 rgba(255,255,255,0.08)",
+            textShadow    : hypnosis ? "none" : "0 1px 4px rgba(0,0,0,0.8)",
+          }}
+          onMouseEnter={(e) => {
+            if (!hypnosis) {
+              e.currentTarget.style.background  = "rgba(255,255,255,0.12)";
+              e.currentTarget.style.transform   = "scale(1.04)";
+              e.currentTarget.style.boxShadow   = "0 6px 32px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.2), inset 0 1px 0 rgba(255,255,255,0.12)";
+            }
+          }}
+          onMouseLeave={(e) => {
+            if (!hypnosis) {
+              e.currentTarget.style.background  = "rgba(0,0,0,0.55)";
+              e.currentTarget.style.transform   = "scale(1)";
+              e.currentTarget.style.boxShadow   = "0 4px 24px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.08), inset 0 1px 0 rgba(255,255,255,0.08)";
+            }
           }}
         >
-          {/* Coin name — glowing */}
-          <div
-            className="sh2"
-            style={{
-              color        : "#fff",
-              fontFamily   : "'Bebas Neue', sans-serif",
-              fontSize     : "clamp(40px, 10vw, 100px)",
-              letterSpacing: "10px",
-              textAlign    : "center",
-              lineHeight   : 0.95,
-              animation    : "ctaGlow 1.8s ease infinite",
-              marginBottom : "8px",
-              pointerEvents: "none",
-            }}
-          >
-            BUY THE<br />D◎G
-          </div>
-
-          {/* Dog — zoomed, floating, no box */}
-          <div style={{
-            position     : "relative",
-            filter       : `drop-shadow(0 0 ${50 + intensity * 70}px rgba(255,255,255,${0.38 + intensity * 0.42}))`,
-            animation    : "hypnoDogIn 0.6s ease forwards",
-            transform    : `translateY(${floatY * 0.6}px) scale(${1 + intensity * 0.07})`,
-            pointerEvents: "none",
-          }}>
-            <img
-              src="/dog.png"
-              alt="The Dog"
-              style={{ width: "clamp(260px, 50vw, 500px)", height: "auto" }}
-              onError={(e) => {
-                if (!e.target.dataset.tried) { e.target.dataset.tried = "1"; e.target.src = "/dog1.png"; }
-              }}
-            />
-          </div>
-
-          {/* CA — tappable inside hypnosis */}
-          <button
-            onClick={(e) => { e.stopPropagation(); copyCA(); boostIntensity(1); }}
-            onPointerEnter={() => boostIntensity(0.8)}
-            style={{
-              marginTop    : "16px",
-              background   : copied ? "rgba(184,255,184,0.13)" : "rgba(0,0,0,0.45)",
-              border       : `1px solid ${copied ? "rgba(184,255,184,0.5)" : "rgba(255,255,255,0.32)"}`,
-              borderRadius : "3px",
-              padding      : "12px 22px",
-              color        : copied ? "#b8ffb8" : "#fff",
-              fontFamily   : "'Space Mono', monospace",
-              fontSize     : "clamp(9px, 1.5vw, 13px)",
-              letterSpacing: "2px",
-              cursor       : "pointer",
-              backdropFilter: "blur(12px)",
-              transition   : "all 0.3s ease",
-              display      : "flex",
-              alignItems   : "center",
-              gap          : "10px",
-              maxWidth     : "88vw",
-              textShadow   : "-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000",
-            }}
-          >
-            <span style={{ opacity: 0.5, flexShrink: 0 }}>{copied ? "✓" : "⎘"}</span>
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {copied ? "COPIED!" : CONTRACT_ADDRESS}
-            </span>
-          </button>
-
-          {/* Exit hint */}
-          <div className="sh" style={{
-            marginTop    : "22px",
-            color        : "rgba(255,255,255,0.3)",
-            fontFamily   : "'Space Mono', monospace",
-            fontSize     : "10px",
-            letterSpacing: "4px",
-            pointerEvents: "none",
-          }}>
-            TAP ANYWHERE TO EXIT
-          </div>
-
-          {/* Ripple rings — size + opacity pulse with intensity */}
-          {[0, 0.65, 1.3].map((delay) => (
-            <div key={delay} style={{
-              position     : "absolute",
-              width        : `${180 + intensity * 120}px`,
-              height       : `${180 + intensity * 120}px`,
-              borderRadius : "50%",
-              border       : `${1 + intensity * 2}px solid rgba(255,255,255,${0.18 + intensity * 0.28})`,
-              animation    : `ripple ${2.4 - intensity * 0.7}s ease-out ${delay}s infinite`,
-              pointerEvents: "none",
-            }} />
-          ))}
-        </div>
-      )}
-
-      {/* ══════════════════════════════════
-           TOKENOMICS SCROLL SECTION
-      ══════════════════════════════════ */}
-      <div style={{
-        position : "relative",
-        zIndex   : 10,
-        padding  : "70px 20px 100px",
-        maxWidth : "800px",
-        margin   : "0 auto",
-        textAlign: "center",
-      }}>
-        <div style={{
-          display             : "grid",
-          gridTemplateColumns : "repeat(auto-fit, minmax(175px, 1fr))",
-          gap                 : "18px",
-        }}>
-          {[
-            { label: "TOTAL SUPPLY", value: "1,000,000,000" },
-            { label: "TAX",          value: "0%"             },
-            { label: "MINT",         value: "REVOKED"        },
-            { label: "LP",           value: "BURNED"         },
-          ].map(({ label, value }) => (
-            <div key={label} style={{
-              border        : "1px solid rgba(255,255,255,0.12)",
-              padding       : "22px 14px",
-              backdropFilter: "blur(10px)",
-              background    : "rgba(0,0,0,0.38)",
-            }}>
-              <div className="sh" style={{
-                color        : "rgba(255,255,255,0.58)",
-                fontFamily   : "'Space Mono', monospace",
-                fontSize     : "10px",
-                letterSpacing: "4px",
-                marginBottom : "8px",
-              }}>{label}</div>
-              <div className="sh2" style={{
-                color        : "#fff",
-                fontFamily   : "'Bebas Neue', sans-serif",
-                fontSize     : "clamp(20px, 4vw, 32px)",
-                letterSpacing: "2px",
-              }}>{value}</div>
-            </div>
-          ))}
-        </div>
-
-        {/* Bottom CA */}
-        <div style={{ marginTop: "54px" }}>
-          <div className="sh" style={{
-            color        : "rgba(255,255,255,0.62)",
-            fontFamily   : "'Space Mono', monospace",
-            fontSize     : "10px",
-            letterSpacing: "4px",
-            marginBottom : "10px",
-          }}>CONTRACT ADDRESS</div>
-          <button
-            onClick={copyCA}
-            style={{
-              background   : "rgba(0,0,0,0.42)",
-              border       : "1px solid rgba(255,255,255,0.18)",
-              borderRadius : "2px",
-              padding      : "13px 26px",
-              color        : copied ? "#b8ffb8" : "rgba(255,255,255,0.78)",
-              fontFamily   : "'Space Mono', monospace",
-              fontSize     : "clamp(9px, 1.5vw, 12px)",
-              letterSpacing: "2px",
-              cursor       : "pointer",
-              transition   : "all 0.3s ease",
-              maxWidth     : "90vw",
-              overflow     : "hidden",
-              textOverflow : "ellipsis",
-              whiteSpace   : "nowrap",
-              textShadow   : "-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000",
-            }}
-          >
-            {copied ? "✓ COPIED" : `⎘  ${CONTRACT_ADDRESS}`}
-          </button>
-        </div>
-
-        <div className="sh" style={{
-          marginTop    : "68px",
-          color        : "rgba(255,255,255,0.32)",
-          fontFamily   : "'Space Mono', monospace",
-          fontSize     : "10px",
-          letterSpacing: "3px",
-        }}>
-          THE DOG STARES INTO THE SPIRAL. THE SPIRAL STARES BACK.
-        </div>
+          {hypnosis ? "◉  EXIT HYPNOSIS  ◉" : "◎  ENTER HYPNOSIS  ◎"}
+        </button>
       </div>
     </div>
   );
 }
+
+
